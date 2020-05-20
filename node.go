@@ -23,13 +23,25 @@ const (
 	TextNode
 )
 
+//
+type ElementType uint
+
+const (
+	MapNode ElementType = iota
+	ArrayNode
+	StringNode
+	NumberNode
+	BooleanNode
+)
+
 // A Node consists of a NodeType and some Data (tag name for
 // element nodes, content for text) and are part of a tree of Nodes.
 type Node struct {
 	Parent, PrevSibling, NextSibling, FirstChild, LastChild *Node
 
-	Type NodeType
-	Data string
+	Type   NodeType
+	ElType ElementType
+	Data   string
 
 	level int
 }
@@ -105,6 +117,7 @@ func parseValue(x interface{}, top *Node, level int) {
 	}
 	switch v := x.(type) {
 	case []interface{}:
+		top.ElType = ArrayNode
 		for _, vv := range v {
 			n := &Node{Type: ElementNode, level: level}
 			addNode(n)
@@ -114,6 +127,7 @@ func parseValue(x interface{}, top *Node, level int) {
 		// The Go’s map iteration order is random.
 		// (https://blog.golang.org/go-maps-in-action#Iteration-order)
 		var keys []string
+		top.ElType = MapNode
 		for key := range v {
 			keys = append(keys, key)
 		}
@@ -124,13 +138,16 @@ func parseValue(x interface{}, top *Node, level int) {
 			parseValue(v[key], n, level+1)
 		}
 	case string:
+		top.ElType = StringNode
 		n := &Node{Data: v, Type: TextNode, level: level}
 		addNode(n)
 	case float64:
+		top.ElType = NumberNode
 		s := strconv.FormatFloat(v, 'f', -1, 64)
 		n := &Node{Data: s, Type: TextNode, level: level}
 		addNode(n)
 	case bool:
+		top.ElType = BooleanNode
 		s := strconv.FormatBool(v)
 		n := &Node{Data: s, Type: TextNode, level: level}
 		addNode(n)
@@ -145,6 +162,86 @@ func parse(b []byte) (*Node, error) {
 	doc := &Node{Type: DocumentNode}
 	parseValue(v, doc, 1)
 	return doc, nil
+}
+
+func convertNode(n *Node) (dst interface{}) {
+
+	switch n.ElType {
+	case MapNode:
+		dst = map[string]interface{}{}
+
+	case ArrayNode:
+		dst = []interface{}{}
+
+	case BooleanNode, StringNode, NumberNode:
+		dst = n.FirstChild.Data
+		return
+	}
+
+	for nn := n.FirstChild; nn != nil; nn = nn.NextSibling {
+		childNode := convertNode(nn)
+
+		switch n.ElType {
+		case MapNode:
+			pmap := dst.(map[string]interface{})
+			pmap[nn.Data] = childNode
+
+		case ArrayNode:
+			pslice := dst.([]interface{})
+			pslice = append(pslice, childNode)
+			dst = pslice
+		}
+	}
+
+	return
+}
+
+func ConvertNodeToInterface(n *Node) (dst interface{}) {
+	dst = convertNode(n)
+	return
+}
+
+func prependParents(n *Node, ni interface{}) interface{} {
+	parent := n.Parent
+	if parent != nil {
+		var dst interface{}
+
+		switch parent.ElType {
+		case MapNode:
+			pi := map[string]interface{}{}
+			pi[n.Data] = ni
+			dst = pi
+		case ArrayNode:
+			ai := []interface{}{ni}
+			dst = ai
+		}
+		p := prependParents(n.Parent, dst)
+		return p
+	} else {
+		return ni
+	}
+}
+
+func ConvertNodesToInterface(ndes []*Node, prefixParents bool) (dst interface{}) {
+	d := []interface{}{}
+	for _, n := range ndes {
+		child := ConvertNodeToInterface(n)
+		if prefixParents {
+			child = prependParents(n, child)
+		}
+		d = append(d, child)
+	}
+
+	dst = d
+	return
+}
+
+func ParseTree(v interface{}) *Node {
+
+	doc := &Node{Type: DocumentNode}
+	parseValue(v, doc, 1)
+
+	return doc
 }
 
 // Parse JSON document.

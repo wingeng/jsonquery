@@ -1,9 +1,12 @@
 package jsonquery
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func parseString(s string) (*Node, error) {
@@ -174,4 +177,272 @@ func TestLargeFloat(t *testing.T) {
 	if n.InnerText() != "365823929453" {
 		t.Fatalf("expected %v but %v", "365823929453", n.InnerText())
 	}
+}
+
+func TestConvert(t *testing.T) {
+	config := `
+{
+    "top" : {
+	"inner" : [ 0,1,2,3 ],
+	"people" : [
+	    {
+		"name": "joe",
+		"age": 45
+	    },       {
+		"name": "mark",
+		"age": 2
+	    }
+	],
+	"route-instance" : {
+             "ri1" : {
+                "metric" : 24
+             },
+             "ri2" : {
+                "metric" : 89
+             }
+       }
+    }
+}
+`
+	jtree := map[string]interface{}{}
+	err := json.Unmarshal([]byte(config), &jtree)
+	assert.Nil(t, err)
+
+	doc := ParseTree(jtree)
+
+	tree := ConvertNodeToInterface(doc)
+
+	outbytes, err := json.MarshalIndent(tree, "", "  ")
+	assert.Nil(t, err)
+
+	exp := `{
+  "top": {
+    "inner": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "people": [
+      {
+        "age": "45",
+        "name": "joe"
+      },
+      {
+        "age": "2",
+        "name": "mark"
+      }
+    ],
+    "route-instance": {
+      "ri1": {
+        "metric": "24"
+      },
+      "ri2": {
+        "metric": "89"
+      }
+    }
+  }
+}`
+	assert.Equal(t, string(outbytes), exp)
+}
+
+func TestQueryConvert(t *testing.T) {
+	config := `
+{
+    "top" : {
+	"inner" : [ 0,1,2,3 ],
+	"people" : [
+	    {
+		"name": "joe",
+		"age": 45
+	    },       {
+		"name": "mark",
+		"age": 2
+	    }
+	],
+	"route-instance" : {
+            "ri1" : {
+                "metric" : 24
+            },
+            "ri2" : {
+                "metric" : 89
+            }
+	},
+	"sites" : [
+	    {
+		"ri1" : {
+		    "ospf" : {
+			"areas" :  [
+			    {
+				"area_id" : "0.0.0.0",
+				"metric" : 0
+			    }
+			]
+		    }
+		},
+		"ri2" : {
+		    "ospf" : {
+			"areas": [
+			    {
+				"area_id" : "0.0.0.1",
+				"metric" : 1
+			    }
+			]
+		    }
+		},
+		"ri3" : {
+		    "ospf" : {
+			"areas" : [
+			    {
+				"area_id" : "0.0.0.2",
+				"metric" : 2
+			    }
+			]
+		    }
+		}
+	    }
+	]
+    }
+}
+`
+	queryInOutExp := func(t *testing.T, config, query, exp string, fullPath bool) {
+		t.Helper()
+
+		doc, err := parseString(config)
+		assert.Nil(t, err)
+
+		names, err := QueryAll(doc, query)
+		if err != nil {
+			t.Error(err)
+		}
+
+		dst := ConvertNodesToInterface(names, fullPath)
+		outbytes, err := json.MarshalIndent(dst, "", "  ")
+		assert.Nil(t, err)
+
+		assert.Equal(t, exp, string(outbytes))
+	}
+
+	exp := `[
+  "joe",
+  "mark"
+]`
+	queryInOutExp(t, config, "//name", exp, false)
+
+	exp = `[
+  {
+    "top": {
+      "people": [
+        {
+          "name": "joe"
+        }
+      ]
+    }
+  },
+  {
+    "top": {
+      "people": [
+        {
+          "name": "mark"
+        }
+      ]
+    }
+  }
+]`
+	queryInOutExp(t, config, "//name", exp, true)
+
+	exp = `[
+  {
+    "age": "2",
+    "name": "mark"
+  }
+]`
+	queryInOutExp(t, config, "//people/*[age < 44]", exp, false)
+
+	exp = `[
+  {
+    "top": {
+      "people": [
+        {
+          "age": "2",
+          "name": "mark"
+        }
+      ]
+    }
+  }
+]`
+	queryInOutExp(t, config, "//people/*[age < 44]", exp, true)
+
+	exp = `[
+  {
+    "metric": "24"
+  }
+]`
+	queryInOutExp(t, config, "//route-instance/*[metric < 44]", exp, false)
+
+	exp = `[
+  {
+    "top": {
+      "route-instance": {
+        "ri1": {
+          "metric": "24"
+        }
+      }
+    }
+  }
+]`
+	queryInOutExp(t, config, "//route-instance/*[metric < 44]", exp, true)
+
+	exp = `[
+  {
+    "area_id": "0.0.0.0",
+    "metric": "0"
+  },
+  {
+    "area_id": "0.0.0.2",
+    "metric": "2"
+  }
+]`
+	queryInOutExp(t, config, `//sites/*//*[area_id != "0.0.0.1"]`, exp, false)
+
+	exp = `[
+  {
+    "top": {
+      "sites": [
+        {
+          "ri1": {
+            "ospf": {
+              "areas": [
+                {
+                  "area_id": "0.0.0.0",
+                  "metric": "0"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "top": {
+      "sites": [
+        {
+          "ri3": {
+            "ospf": {
+              "areas": [
+                {
+                  "area_id": "0.0.0.2",
+                  "metric": "2"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+]`
+	queryInOutExp(t, config, `//sites/*//*[area_id != "0.0.0.1"]`, exp, true)
+
 }
