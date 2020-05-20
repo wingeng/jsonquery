@@ -3,6 +3,7 @@ package jsonquery
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -123,6 +124,18 @@ func parseValue(x interface{}, top *Node, level int) {
 			addNode(n)
 			parseValue(vv, n, level+1)
 		}
+	case map[interface{}]interface{}:
+		var keys []string
+		top.ElType = MapNode
+		for key := range v {
+			keys = append(keys, key.(string))
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			n := &Node{Data: key, Type: ElementNode, level: level}
+			addNode(n)
+			parseValue(v[key], n, level+1)
+		}
 	case map[string]interface{}:
 		// The Go’s map iteration order is random.
 		// (https://blog.golang.org/go-maps-in-action#Iteration-order)
@@ -151,6 +164,13 @@ func parseValue(x interface{}, top *Node, level int) {
 		s := strconv.FormatBool(v)
 		n := &Node{Data: s, Type: TextNode, level: level}
 		addNode(n)
+
+	default:
+		top.ElType = NumberNode
+		s := fmt.Sprintf("%v", v)
+		n := &Node{Data: s, Type: TextNode, level: level}
+		addNode(n)
+
 	}
 }
 
